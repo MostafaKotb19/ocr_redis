@@ -1,6 +1,3 @@
-# pdf_to_redis_parser/docker-compose.yml
-version: '3.8'
-
 services:
   app:
     build:
@@ -11,39 +8,32 @@ services:
       - ./data:/app/data
       - ./output:/app/output
       - paddlex_cache:/root/.paddlex # For PaddleX models
-      - paddleocr_cache:/root/.paddleocr # For PaddleOCR models, if different
+      - paddleocr_cache:/root/.paddleocr # For PaddleOCR models
     depends_on:
       - redis_service
     environment:
       - REDIS_HOST=redis_service
       - REDIS_PORT=6379
       - NVIDIA_VISIBLE_DEVICES=all # Makes all GPUs visible
-      - PADDLE_ENFORCE_GPU=1 # Optional: try to force Paddle to use GPU if available
-    deploy: # This is for Docker Swarm, for local docker-compose v2.1+ use below
+      - PADDLE_ENFORCE_GPU=1 # Try to force Paddle to use GPU if available
+    deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1 # Or 'all'
+              count: 1
               capabilities: [gpu]
-    # For older docker-compose or non-swarm, 'runtime: nvidia' was used, 
-    # but 'devices' under 'deploy.resources' is the more modern way.
-    # If the above deploy syntax doesn't work with your docker-compose version,
-    # you might need to ensure your docker daemon is configured for default nvidia runtime
-    # or look up the specific syntax for your `docker-compose` version.
-    # An alternative simplified way for some setups:
-    # runtime: nvidia # Add this line if 'deploy' section causes issues.
     networks:
       - app_network
 
   redis_service: # Name of the Redis service
-    image: "redis:alpine" # Use a standard Redis image
+    image: "redis:alpine" # Standard Redis image
     container_name: pdf_parser_redis
     ports:
       - "6380:6379" # Expose Redis on host port 6380 (to avoid conflict if you have local Redis on 6379)
                     # Container port is always 6379
     volumes:
-      - redis_data:/data # Optional: Persist Redis data across restarts
+      - redis_data:/data # Persist Redis data across restarts
     networks:
       - app_network
 

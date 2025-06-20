@@ -46,6 +46,150 @@ This project develops a Docker-based system to recognize tabulated text from a s
     └── redis_handler.py     # Manages Redis connection and data storage/retrieval
 ```
 
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant DockerCompose
+    participant AppContainer as "App Container (main_parser.py)"
+    participant OCRExtractor as "OCRExtractor (in App)"
+    participant Poppler as "Poppler/pdf2image (in App)"
+    participant PaddleOCR as "PaddleOCR Engine (in App)"
+    participant DataProcessor as "DataProcessor (in App)"
+    participant Pandas as "Pandas (in App)"
+    participant RedisHandler as "RedisHandler (in App)"
+    participant RedisService as "Redis Service (Container)"
+    participant FileSystem as "File System (Host/Volume)"
+
+    %% Setup Phase
+    User->>FileSystem: Place input PDF (e.g., sample_insurance_report.pdf) in data/
+    User->>DockerCompose: docker-compose build
+    DockerCompose-->>User: Images built (App, pulls Redis)
+
+    %% Run Phase
+    User->>DockerCompose: docker-compose up -d redis_service
+    DockerCompose->>RedisService: Start container
+    activate RedisService
+    RedisService-->>DockerCompose: Redis service running
+
+    User->>DockerCompose: docker-compose run --rm app data/sample_insurance_report.pdf [--use_gpu]
+    DockerCompose->>AppContainer: Start container & run main_parser.py
+    activate AppContainer
+
+    AppContainer->>FileSystem: Read PDF from /app/data/
+    AppContainer->>OCRExtractor: Instantiate(use_gpu, show_log)
+    activate OCRExtractor
+    AppContainer->>OCRExtractor: extract_tables_from_pdf(pdf_path)
+    OCRExtractor->>Poppler: convert_from_path(pdf_path)
+    activate Poppler
+    Poppler-->>OCRExtractor: Return PIL Image
+    deactivate Poppler
+    OCRExtractor->>PaddleOCR: predict(image_array)
+    activate PaddleOCR
+    Note over PaddleOCR: Detects layout & performs OCR & reconstructs table HTML
+    PaddleOCR-->>OCRExtractor: Return raw OCR result (inc. HTML tables)
+    deactivate PaddleOCR
+    OCRExtractor->>OCRExtractor: Identify specific tables (Metadata, Claims, Benefits) from HTML list
+    OCRExtractor-->>AppContainer: Return Dict[table_name, html_string]
+    deactivate OCRExtractor
+
+    AppContainer->>DataProcessor: Instantiate(extracted_html_tables)
+    activate DataProcessor
+    AppContainer->>DataProcessor: process_data()
+
+    DataProcessor->>Pandas: pd.read_html(claims_metadata_html)
+    activate Pandas
+    Pandas-->>DataProcessor: Raw DataFrame for claims/metadata
+    deactivate Pandas
+    DataProcessor->>DataProcessor: Extract metadata (End Date, Class, Overall Limit)
+    DataProcessor->>DataProcessor: Parse and structure Claims data, add metadata
+    Note right of DataProcessor: "Sets "Policy Year" for claims rows"
+
+    DataProcessor->>Pandas: pd.read_html(benefits_html)
+    activate Pandas
+    Pandas-->>DataProcessor: Raw DataFrame for benefits
+    deactivate Pandas
+    DataProcessor->>DataProcessor: Parse and structure Benefits data
+    DataProcessor->>DataProcessor: Process "Notes" column
+    Note right of DataProcessor: "Sets "Policy Year" and "End Date" for benefits rows"
+
+    DataProcessor-->>AppContainer: Return claims_df, benefits_df
+    deactivate DataProcessor
+
+    AppContainer->>AppContainer: Create output_dict = {"claim_experiences": {"claims": claims_df, "benefits": benefits_df}}
+    AppContainer->>FileSystem: Pickle.dump(output_dict) to /app/output/dataframes.txt
+    Note left of AppContainer: "FileSystem (Host/Volume) output/dataframes.txt updated"
+
+    AppContainer->>RedisHandler: Instantiate(host="redis_service", port=6379)
+    activate RedisHandler
+    RedisHandler->>RedisService: Connect
+    RedisService-->>RedisHandler: Connection established
+    AppContainer->>RedisHandler: save_data("insurance_data_extract", output_dict)
+    RedisHandler->>RedisHandler: Pickle.dumps(output_dict)
+    RedisHandler->>RedisService: SET "insurance_data_extract" <pickled_bytes>
+    RedisService-->>RedisHandler: Confirmation (OK)
+    RedisHandler-->>AppContainer: Success/Failure
+    deactivate RedisHandler
+
+    AppContainer-->>DockerCompose: Process finished, container exits
+    deactivate AppContainer
+    DockerCompose-->>User: Logs, container stops
+
+    %% Verification (Optional)
+    User->>FileSystem: Check ./output/dataframes.txt
+    User->>DockerCompose: docker exec -it pdf_parser_redis redis-cli
+    DockerCompose->>RedisService: Forward redis-cli commands
+    User->>RedisService: GET insurance_data_extract (via redis-cli)
+    RedisService-->>User: Return pickled string (via redis-cli)
+
+    %% Cleanup (Optional)
+    User->>DockerCompose: docker-compose down [-v]
+    DockerCompose->>RedisService: Stop container
+    deactivate RedisService
+    DockerCompose-->>User: Services stopped
+```
+
+## Dataflow Diagram
+
+```mermaid
+graph TD
+    A[Input: single_page_pdf] --> B(main_parser.py);
+
+    subgraph "Docker Orchestration"
+        DOCKER_COMPOSE[docker-compose]
+    end
+
+    subgraph "Application Container (app)"
+        B --> C{OCRExtractor};
+        C --> |PDF Path| D[pdf2image/Poppler];
+        D --> |PIL Image| C;
+        C --> |Image Array| E[PaddleOCR Engine];
+        E --> |Raw OCR Result + HTML Tables| C;
+        C --> |Identified HTML Tables Dict| B;
+
+        B --> F{DataProcessor};
+        F --> |HTML Table Strings| G[Pandas: pd.read_html];
+        G --> |Raw DataFrames| F;
+        F --> |Metadata Dict| F;
+        F --> |Claims DataFrame| H[Structured Claims DataFrame];
+        F --> |Benefits DataFrame| I[Structured Benefits DataFrame];
+        B --> |Claims DataFrame, Benefits DataFrame| J{Output Dictionary Formatter};
+        J --> |Python Dict claim_experiences: claims df1, benefits df2| K(Pickling Module);
+        K --> |Pickled Bytes| L[File System: output/dataframes.txt];
+        J --> |Python Dict| M{RedisHandler};
+        M --> |Pickled Bytes| N[Redis Service];
+    end
+
+    subgraph "External Services"
+        N
+    end
+
+    style A fill:#6A0DAD,stroke:#E0E0E0,stroke-width:2px,color:#E0E0E0
+    style L fill:#4682B4,stroke:#E0E0E0,stroke-width:2px,color:#E0E0E0
+    style N fill:#D2691E,stroke:#E0E0E0,stroke-width:2px,color:#E0E0E0
+```
+
 ## Setup & Installation (Docker)
 
 1.  **Clone the Repository:**

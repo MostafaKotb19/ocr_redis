@@ -1,0 +1,35 @@
+graph TD
+    A[Input: single_page_pdf] --> B(main_parser.py);
+
+    subgraph "Docker Orchestration"
+        DOCKER_COMPOSE[docker-compose]
+    end
+
+    subgraph "Application Container (app)"
+        B --> C{OCRExtractor};
+        C --> |PDF Path| D[pdf2image/Poppler];
+        D --> |PIL Image| C;
+        C --> |Image Array| E[PaddleOCR Engine];
+        E --> |Raw OCR Result + HTML Tables| C;
+        C --> |Identified HTML Tables Dict| B;
+
+        B --> F{DataProcessor};
+        F --> |HTML Table Strings| G[Pandas: pd.read_html];
+        G --> |Raw DataFrames| F;
+        F --> |Metadata Dict| F;
+        F --> |Claims DataFrame| H[Structured Claims DataFrame];
+        F --> |Benefits DataFrame| I[Structured Benefits DataFrame];
+        B --> |Claims DataFrame, Benefits DataFrame| J{Output Dictionary Formatter};
+        J --> |Python Dict claim_experiences: claims df1, benefits df2| K(Pickling Module);
+        K --> |Pickled Bytes| L[File System: output/dataframes.txt];
+        J --> |Python Dict| M{RedisHandler};
+        M --> |Pickled Bytes| N[Redis Service];
+    end
+
+    subgraph "External Services"
+        N
+    end
+
+    style A fill:#6A0DAD,stroke:#E0E0E0,stroke-width:2px,color:#E0E0E0
+    style L fill:#4682B4,stroke:#E0E0E0,stroke-width:2px,color:#E0E0E0
+    style N fill:#D2691E,stroke:#E0E0E0,stroke-width:2px,color:#E0E0E0

@@ -1,0 +1,13 @@
+# .dockerignore
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+output/
+dataframes.txt
+*.csv
+*.html 
+# Add any other local files/folders not needed for the build
